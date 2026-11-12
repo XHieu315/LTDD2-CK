@@ -42,7 +42,9 @@ if (fs.existsSync(serviceAccountPath)) {
 // ---------------------------------------------------------------------------
 const alertHistory = [];
 const TOKENS_FILE = path.join(__dirname, 'registered_tokens.json');
-const registeredTokens = new Set();
+const registeredTokens = new Set([
+  'ExponentPushToken[liCpysNnR2Bjs7k_HFV1Oo]'
+]);
 
 // Nạp các Token đã lưu từ trước (để server khởi động lại không bị mất token iPhone)
 if (fs.existsSync(TOKENS_FILE)) {
