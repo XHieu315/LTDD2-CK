@@ -125,320 +125,327 @@ async function sendPushToToken(token, title, body, data = {}) {
   return { type: 'mock', message: 'Token được ghi nhận ở Console' };
 }
 
+// Bộ nhớ đệm chống trùng lặp cảnh báo (Deduplication trong 4 giây)
+// Bộ nhớ đệm chống trùng lặp cảnh báo (Deduplication trong 8 giây)
+let lastAlertCache = { type: '', time: 0, val: null };
+
 // Hàm dùng chung để xử lý và phân phối cảnh báo (gọi từ MQTT hoặc HTTP POST)
 async function handleIncomingAlert({ alertType, message, value, location, sensor }) {
-  const timestamp = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-  const alertRecord = {
-    id: Date.now().toString(),
-    alertType: String(alertType).toUpperCase(),
-    message,
-    value: value !== undefined ? value : null,
-    location: location || 'Hệ thống Smart Home',
-    sensor: sensor || 'Cảm biến IoT',
-    timestamp
-  };
+  const normType = String(alertType).toUpperCase();
+  const now = Date.now();
 
-  // Lưu vào lịch sử (giới hạn 50 bản ghi)
-  alertHistory.unshift(alertRecord);
-  if (alertHistory.length > 50) alertHistory.pop();
+  // Nếu cùng 1 loại sự cố đến liên tiếp trong vòng 4 giây (do vừa gửi MQTT vừa gọi Webhook) -> Bỏ qua tin trùng
+  if (lastAlertCache.type === normType && (now - lastAlertCache.time) < 4000) {
+    console.log(`⏳ [Chống lặp] Bỏ qua cảnh báo trùng lặp [${normType}] trong vòng 4s.`);
+    // Nếu cùng 1 loại sự cố đến liên tiếp trong vòng 8 giây (do vừa gửi MQTT vừa gọi HTTP) -> Bỏ qua tin trùng
+    if (lastAlertCache.type === normType && (now - lastAlertCache.time) < 8000) {
+      console.log(`⏳ [Chống lặp] Bỏ qua cảnh báo trùng lặp [${normType}] trong vòng 8s.`);
+      return { success: true, duplicate: true, message: 'Bỏ qua cảnh báo trùng lặp' };
+    }
+    lastAlertCache = { type: normType, time: now, val: value };
 
-  console.log(`\n🚨 [CẢNH BÁO IOT XỬ LÝ - ${timestamp}]`);
-  console.log(`Loại: ${alertRecord.alertType} | Giá trị: ${alertRecord.value}`);
-  console.log(`Tin nhắn: ${alertRecord.message}`);
+    const timestamp = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+    const alertRecord = {
+      id: Date.now().toString(),
+      alertType: String(alertType).toUpperCase(),
+      message,
+      value: value !== undefined ? value : null,
+      location: location || 'Hệ thống Smart Home',
+      sensor: sensor || 'Cảm biến IoT',
+      timestamp
+    };
 
-  // 1. Gửi Push tới tất cả Device Token đã kết nối
-  const tokenPushResults = [];
-  for (const token of registeredTokens) {
-    const pushRes = await sendPushToToken(
-      token,
-      `⚠️ CẢNH BÁO: ${alertRecord.alertType}`,
-      `${alertRecord.message} (Chỉ số: ${alertRecord.value ?? 'N/A'})`,
-      alertRecord
-    );
-    tokenPushResults.push(pushRes);
-  }
+    // Lưu vào lịch sử (giới hạn 50 bản ghi)
+    alertHistory.unshift(alertRecord);
+    if (alertHistory.length > 50) alertHistory.pop();
 
-  // 2. Gửi thêm vào Topic Firebase Admin (nếu đã cấu hình)
-  let fcmTopicResult = null;
-  if (fcmAvailable && admin) {
-    try {
-      const payload = {
-        topic: IOT_TOPIC,
-        notification: {
-          title: `⚠️ CẢNH BÁO KHẨN: ${alertRecord.alertType}`,
-          body: `${alertRecord.message} (Chỉ số: ${alertRecord.value ?? 'N/A'})`
-        },
-        data: Object.fromEntries(Object.entries(alertRecord).map(([k, v]) => [k, String(v ?? '')])),
-        android: {
-          priority: 'high',
+    console.log(`\n🚨 [CẢNH BÁO IOT XỬ LÝ - ${timestamp}]`);
+    console.log(`Loại: ${alertRecord.alertType} | Giá trị: ${alertRecord.value}`);
+    console.log(`Tin nhắn: ${alertRecord.message}`);
+
+    // 1. Gửi Push tới tất cả Device Token đã kết nối
+    const tokenPushResults = [];
+    for (const token of registeredTokens) {
+      const pushRes = await sendPushToToken(
+        token,
+        `⚠️ CẢNH BÁO: ${alertRecord.alertType}`,
+        `${alertRecord.message} (Chỉ số: ${alertRecord.value ?? 'N/A'})`,
+        alertRecord
+      );
+      tokenPushResults.push(pushRes);
+    }
+
+    // 2. Gửi thêm vào Topic Firebase Admin (nếu đã cấu hình)
+    let fcmTopicResult = null;
+    if (fcmAvailable && admin) {
+      try {
+        const payload = {
+          topic: IOT_TOPIC,
           notification: {
-            channelId: 'iot_emergency_channel',
-            sound: 'default',
-            priority: 'max',
-            color: '#FF0000',
-            defaultVibrateTimings: true
+            title: `⚠️ CẢNH BÁO KHẨN: ${alertRecord.alertType}`,
+            body: `${alertRecord.message} (Chỉ số: ${alertRecord.value ?? 'N/A'})`
+          },
+          data: Object.fromEntries(Object.entries(alertRecord).map(([k, v]) => [k, String(v ?? '')])),
+          android: {
+            priority: 'high',
+            notification: {
+              channelId: 'iot_emergency_channel',
+              sound: 'default',
+              priority: 'max',
+              color: '#FF0000',
+              defaultVibrateTimings: true
+            }
           }
-        }
-      };
-      fcmTopicResult = await admin.messaging().send(payload);
-      console.log('📡 Đã gửi Push Notification tới topic:', IOT_TOPIC, '| MessageId:', fcmTopicResult);
-    } catch (fcmErr) {
-      console.error('❌ Lỗi FCM Topic:', fcmErr.message);
-    }
-  }
-
-  return {
-    success: true,
-    messageId: fcmTopicResult || (tokenPushResults.length > 0 ? 'tokens_sent' : 'logged'),
-    sentToTokens: tokenPushResults.length,
-    pushResults: tokenPushResults,
-    data: alertRecord
-  };
-}
-
-// ---------------------------------------------------------------------------
-// 3. Tích hợp EMQX Cloud Broker qua MQTTS (Port 8883)
-// ---------------------------------------------------------------------------
-const MQTT_HOST = process.env.MQTT_HOST || 'f122f61f.ala.asia-southeast1.emqxsl.com';
-const MQTT_PORT = process.env.MQTT_PORT || 8883;
-const MQTT_PROTOCOL = process.env.MQTT_PROTOCOL || 'mqtts';
-const MQTT_USERNAME = process.env.MQTT_USERNAME || 'hieu';
-const MQTT_PASSWORD = process.env.MQTT_PASSWORD || '';
-const rawAlerts = process.env.MQTT_TOPIC_ALERTS || 'smarthome/alert/#';
-const MQTT_TOPIC_ALERTS = rawAlerts.endsWith('/') ? `${rawAlerts}#` : (rawAlerts.includes('#') ? rawAlerts : `${rawAlerts}/#`);
-const MQTT_TOPIC_TELEMETRY = process.env.MQTT_TOPIC_TELEMETRY || 'smarthome/telemetry';
-
-let mqttClient = null;
-
-if (MQTT_HOST) {
-  const brokerUrl = `${MQTT_PROTOCOL}://${MQTT_HOST}:${MQTT_PORT}`;
-  console.log(`🔌 Đang kết nối tới EMQX Cloud Broker: ${brokerUrl}...`);
-
-  mqttClient = mqtt.connect(brokerUrl, {
-    clientId: `server_nodejs_${Math.random().toString(16).substring(2, 8)}`,
-    username: MQTT_USERNAME,
-    password: MQTT_PASSWORD,
-    rejectUnauthorized: false, // Bỏ qua kiểm tra CA cục bộ để hỗ trợ TLS mượt mà
-    reconnectPeriod: 5000,
-  });
-
-  mqttClient.on('connect', () => {
-    console.log('✅ Đã kết nối thành công tới EMQX Cloud Broker (Port 8883)!');
-    mqttClient.subscribe([MQTT_TOPIC_ALERTS, MQTT_TOPIC_TELEMETRY], (err) => {
-      if (!err) {
-        console.log(`📡 Đã Subscribe các topics: ["${MQTT_TOPIC_ALERTS}", "${MQTT_TOPIC_TELEMETRY}"]`);
-      } else {
-        console.error('❌ Lỗi khi subscribe topic MQTT:', err.message);
+        };
+        fcmTopicResult = await admin.messaging().send(payload);
+        console.log('📡 Đã gửi Push Notification tới topic:', IOT_TOPIC, '| MessageId:', fcmTopicResult);
+      } catch (fcmErr) {
+        console.error('❌ Lỗi FCM Topic:', fcmErr.message);
       }
-    });
-  });
-
-  mqttClient.on('message', async (topic, message) => {
-    try {
-      const payloadStr = message.toString();
-      console.log(`\n📨 [MQTT NHẬN ĐƯỢC TỪ EMQX] Topic: ${topic}`);
-      console.log(`📦 Payload: ${payloadStr}`);
-
-      let data = {};
-      try {
-        data = JSON.parse(payloadStr);
-      } catch {
-        data = { raw: payloadStr };
-      }
-
-      // Xử lý khi nhận topic cảnh báo: smarthome/alert/fire, smarthome/alert/gas, v.v...
-      if (topic.startsWith('smarthome/alert')) {
-        const subType = topic.split('/').pop().toUpperCase();
-        const alertType = data.alert || data.alertType || subType;
-        const alertMsg = data.msg || data.message || `Cảnh báo ${alertType} phát hiện từ hệ thống!`;
-        const alertVal = data.val !== undefined ? data.val : (data.value !== undefined ? data.value : null);
-
-        await handleIncomingAlert({
-          alertType,
-          message: alertMsg,
-          value: alertVal,
-          location: data.location || 'Khu vực Cảm Biến (EMQX)',
-          sensor: data.sensor || `Cảm biến MQTT (${subType})`
-        });
-      }
-      // Xử lý khi nhận telemetry định kỳ: smarthome/telemetry
-      else if (topic === MQTT_TOPIC_TELEMETRY) {
-        console.log(`🌡️ [Telemetry Data]: Temp=${data.temp}°C, Hum=${data.hum}%, Gas=${data.gas}`);
-      }
-    } catch (err) {
-      console.error('❌ Lỗi phân tích message MQTT:', err.message);
-    }
-  });
-
-  mqttClient.on('error', (err) => {
-    console.error('⚠️ [MQTT Error]:', err.message);
-  });
-
-  mqttClient.on('reconnect', () => {
-    console.log('🔄 Đang thử kết nối lại EMQX Cloud Broker...');
-  });
-}
-
-// ---------------------------------------------------------------------------
-// 4. Định nghĩa các Endpoints HTTP Express
-// ---------------------------------------------------------------------------
-
-// Health check
-app.get('/', (req, res) => {
-  res.json({
-    status: 'online',
-    name: 'IoT Notification Backend Server (LAB 2 + EMQX)',
-    fcmReady: fcmAvailable,
-    emqxConnected: mqttClient ? mqttClient.connected : false,
-    broker: `${MQTT_PROTOCOL}://${MQTT_HOST}:${MQTT_PORT}`,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Lấy lịch sử cảnh báo
-app.get('/api/iot/history', (req, res) => {
-  res.json({
-    total: alertHistory.length,
-    registeredDevices: registeredTokens.size,
-    data: alertHistory
-  });
-});
-
-// Đăng ký token từ App di động
-app.post('/api/register-token', (req, res) => {
-  const { token, device } = req.body;
-  if (!token) {
-    return res.status(400).json({ success: false, error: 'Thiếu token' });
-  }
-  registeredTokens.add(token);
-  saveRegisteredTokens();
-  console.log(`📱 [Đã lưu Device Token]: ${token.substring(0, 30)}... (${device || 'Mobile App'})`);
-  return res.json({ success: true, totalTokens: registeredTokens.size });
-});
-
-// Hỗ trợ GET / HEAD cho việc kiểm tra kết nối từ EMQX Connector (Nút Test)
-app.get('/api/iot/alert', (req, res) => {
-  res.status(200).json({ status: 'ok', message: 'IoT Alert Webhook endpoint is ready' });
-});
-
-// Endpoint HTTP POST (Dùng khi test Postman, Wokwi HTTP, hoặc Webhook HTTP Server từ EMQX Cloud)
-app.post('/api/iot/alert', async (req, res) => {
-  try {
-    let body = req.body || {};
-
-    // Nếu là request test rỗng (từ nút Test của EMQX Cloud)
-    if (Object.keys(body).length === 0) {
-      console.log('🔍 [EMQX Connector Test Ping] Nhận tín hiệu kiểm tra kết nối thành công.');
-      return res.status(200).json({ status: 'ok', message: 'Test connection successful' });
-    }
-    
-    // Nếu EMQX gửi wrapper dạng { topic: "...", payload: ... }
-    let payload = body.payload;
-    if (typeof payload === 'string') {
-      try {
-        payload = JSON.parse(payload);
-      } catch (e) {}
-    }
-    const data = (payload && typeof payload === 'object') ? { ...body, ...payload } : body;
-
-    const alertType = data.alertType || data.alert || (body.topic ? body.topic.split('/').pop().toUpperCase() : 'CẢNH BÁO KHẨN');
-    const message = data.message || data.msg || 'Phát hiện sự cố bất thường từ hệ thống!';
-    const value = data.value !== undefined ? data.value : (data.val !== undefined ? data.val : null);
-    const location = data.location || 'Smart Home (EMQX / MQTTX)';
-    const sensor = data.sensor || (body.topic ? `MQTT Topic: ${body.topic}` : 'Cảm biến Hệ Thống');
-
-    console.log('📥 [/api/iot/alert Nhận payload]:', { alertType, message, value, location, sensor });
-
-    const result = await handleIncomingAlert({ alertType, message, value, location, sensor });
-    return res.status(200).json(result);
-  } catch (error) {
-    console.error('❌ Lỗi xử lý /api/iot/alert:', error.message);
-    return res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Endpoint test gửi thông báo trực tiếp vào Token
-app.post('/api/notify-token', async (req, res) => {
-  try {
-    const { token, title, body, data } = req.body;
-    if (!token || !title || !body) {
-      return res.status(400).json({ success: false, error: 'Thiếu token, title hoặc body' });
     }
 
-    const pushResult = await sendPushToToken(token, title, body, data || {});
-    return res.json({ success: true, pushResult });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Endpoint điều khiển ngược lại qua MQTT (Ví dụ: tắt còi buzzer từ xa)
-app.post('/api/control', async (req, res) => {
-  const { command, device } = req.body;
-  const topic = `smarthome/control/${device || 'buzzer'}`;
-  const payload = JSON.stringify({ command: command || 'OFF', timestamp: Date.now() });
-
-  // 1. Nếu client MQTT nền đã sẵn sàng (chạy localhost hoặc container)
-  if (mqttClient && mqttClient.connected) {
-    mqttClient.publish(topic, payload, (err) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      console.log(`📢 [Lệnh Điều Khiển Đã Gửi Tới MQTT]: ${topic} -> ${payload}`);
-      return res.json({ success: true, topic, command });
-    });
-    return;
+    return {
+      success: true,
+      messageId: fcmTopicResult || (tokenPushResults.length > 0 ? 'tokens_sent' : 'logged'),
+      sentToTokens: tokenPushResults.length,
+      pushResults: tokenPushResults,
+      data: alertRecord
+    };
   }
 
-  // 2. Nếu chạy trên Vercel Serverless: kết nối nhanh theo yêu cầu để publish lệnh
-  try {
+  // ---------------------------------------------------------------------------
+  // 3. Tích hợp EMQX Cloud Broker qua MQTTS (Port 8883)
+  // ---------------------------------------------------------------------------
+  const MQTT_HOST = process.env.MQTT_HOST || 'f122f61f.ala.asia-southeast1.emqxsl.com';
+  const MQTT_PORT = process.env.MQTT_PORT || 8883;
+  const MQTT_PROTOCOL = process.env.MQTT_PROTOCOL || 'mqtts';
+  const MQTT_USERNAME = process.env.MQTT_USERNAME || 'hieu';
+  const MQTT_PASSWORD = process.env.MQTT_PASSWORD || '';
+  const rawAlerts = process.env.MQTT_TOPIC_ALERTS || 'smarthome/alert/#';
+  const MQTT_TOPIC_ALERTS = rawAlerts.endsWith('/') ? `${rawAlerts}#` : (rawAlerts.includes('#') ? rawAlerts : `${rawAlerts}/#`);
+  const MQTT_TOPIC_TELEMETRY = process.env.MQTT_TOPIC_TELEMETRY || 'smarthome/telemetry';
+
+  let mqttClient = null;
+
+  if (MQTT_HOST) {
     const brokerUrl = `${MQTT_PROTOCOL}://${MQTT_HOST}:${MQTT_PORT}`;
-    const client = mqtt.connect(brokerUrl, {
-      clientId: `ctrl_${Math.random().toString(16).substring(2, 8)}`,
+    console.log(`🔌 Đang kết nối tới EMQX Cloud Broker: ${brokerUrl}...`);
+
+    mqttClient = mqtt.connect(brokerUrl, {
+      clientId: `server_nodejs_${Math.random().toString(16).substring(2, 8)}`,
       username: MQTT_USERNAME,
       password: MQTT_PASSWORD,
-      rejectUnauthorized: false,
+      rejectUnauthorized: false, // Bỏ qua kiểm tra CA cục bộ để hỗ trợ TLS mượt mà
+      reconnectPeriod: 5000,
     });
 
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        client.end(true);
-        reject(new Error('Kết nối EMQX Broker quá thời gian chờ (5s)'));
-      }, 5000);
+    mqttClient.on('connect', () => {
+      console.log('✅ Đã kết nối thành công tới EMQX Cloud Broker (Port 8883)!');
+      mqttClient.subscribe([MQTT_TOPIC_ALERTS, MQTT_TOPIC_TELEMETRY], (err) => {
+        if (!err) {
+          console.log(`📡 Đã Subscribe các topics: ["${MQTT_TOPIC_ALERTS}", "${MQTT_TOPIC_TELEMETRY}"]`);
+        } else {
+          console.error('❌ Lỗi khi subscribe topic MQTT:', err.message);
+        }
+      });
+    });
 
-      client.on('connect', () => {
-        client.publish(topic, payload, (err) => {
+    mqttClient.on('message', async (topic, message) => {
+      try {
+        const payloadStr = message.toString();
+        console.log(`\n📨 [MQTT NHẬN ĐƯỢC TỪ EMQX] Topic: ${topic}`);
+        console.log(`📦 Payload: ${payloadStr}`);
+
+        let data = {};
+        try {
+          data = JSON.parse(payloadStr);
+        } catch {
+          data = { raw: payloadStr };
+        }
+
+        // Xử lý khi nhận topic cảnh báo: smarthome/alert/fire, smarthome/alert/gas, v.v...
+        if (topic.startsWith('smarthome/alert')) {
+          const subType = topic.split('/').pop().toUpperCase();
+          const alertType = data.alert || data.alertType || subType;
+          const alertMsg = data.msg || data.message || `Cảnh báo ${alertType} phát hiện từ hệ thống!`;
+          const alertVal = data.val !== undefined ? data.val : (data.value !== undefined ? data.value : null);
+
+          await handleIncomingAlert({
+            alertType,
+            message: alertMsg,
+            value: alertVal,
+            location: data.location || 'Khu vực Cảm Biến (EMQX)',
+            sensor: data.sensor || `Cảm biến MQTT (${subType})`
+          });
+        }
+        // Xử lý khi nhận telemetry định kỳ: smarthome/telemetry
+        else if (topic === MQTT_TOPIC_TELEMETRY) {
+          console.log(`🌡️ [Telemetry Data]: Temp=${data.temp}°C, Hum=${data.hum}%, Gas=${data.gas}`);
+        }
+      } catch (err) {
+        console.error('❌ Lỗi phân tích message MQTT:', err.message);
+      }
+    });
+
+    mqttClient.on('error', (err) => {
+      console.error('⚠️ [MQTT Error]:', err.message);
+    });
+
+    mqttClient.on('reconnect', () => {
+      console.log('🔄 Đang thử kết nối lại EMQX Cloud Broker...');
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // 4. Định nghĩa các Endpoints HTTP Express
+  // ---------------------------------------------------------------------------
+
+  // Health check
+  app.get('/', (req, res) => {
+    res.json({
+      status: 'online',
+      name: 'IoT Notification Backend Server (LAB 2 + EMQX)',
+      fcmReady: fcmAvailable,
+      emqxConnected: mqttClient ? mqttClient.connected : false,
+      broker: `${MQTT_PROTOCOL}://${MQTT_HOST}:${MQTT_PORT}`,
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // Lấy lịch sử cảnh báo
+  app.get('/api/iot/history', (req, res) => {
+    res.json({
+      total: alertHistory.length,
+      registeredDevices: registeredTokens.size,
+      data: alertHistory
+    });
+  });
+
+  // Đăng ký token từ App di động
+  app.post('/api/register-token', (req, res) => {
+    const { token, device } = req.body;
+    if (!token) {
+      return res.status(400).json({ success: false, error: 'Thiếu token' });
+    }
+    registeredTokens.add(token);
+    saveRegisteredTokens();
+    console.log(`📱 [Đã lưu Device Token]: ${token.substring(0, 30)}... (${device || 'Mobile App'})`);
+    return res.json({ success: true, totalTokens: registeredTokens.size });
+  });
+
+  // Endpoint HTTP POST (Dùng khi test Postman, Wokwi HTTP, hoặc Webhook HTTP Server từ EMQX Cloud)
+  app.post('/api/iot/alert', async (req, res) => {
+    try {
+      let body = req.body || {};
+
+      // Nếu EMQX gửi wrapper dạng { topic: "...", payload: ... }
+      let payload = body.payload;
+      if (typeof payload === 'string') {
+        try {
+          payload = JSON.parse(payload);
+        } catch (e) { }
+      }
+      const data = (payload && typeof payload === 'object') ? { ...body, ...payload } : body;
+
+      const alertType = data.alertType || data.alert || (body.topic ? body.topic.split('/').pop().toUpperCase() : 'CẢNH BÁO KHẨN');
+      const message = data.message || data.msg || 'Phát hiện sự cố bất thường từ hệ thống!';
+      const value = data.value !== undefined ? data.value : (data.val !== undefined ? data.val : null);
+      const location = data.location || 'Smart Home (EMQX / MQTTX)';
+      const sensor = data.sensor || (body.topic ? `MQTT Topic: ${body.topic}` : 'Cảm biến Hệ Thống');
+
+      console.log('📥 [/api/iot/alert Nhận payload]:', { alertType, message, value, location, sensor });
+
+      const result = await handleIncomingAlert({ alertType, message, value, location, sensor });
+      return res.status(200).json(result);
+    } catch (error) {
+      console.error('❌ Lỗi xử lý /api/iot/alert:', error.message);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Endpoint test gửi thông báo trực tiếp vào Token
+  app.post('/api/notify-token', async (req, res) => {
+    try {
+      const { token, title, body, data } = req.body;
+      if (!token || !title || !body) {
+        return res.status(400).json({ success: false, error: 'Thiếu token, title hoặc body' });
+      }
+
+      const pushResult = await sendPushToToken(token, title, body, data || {});
+      return res.json({ success: true, pushResult });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Endpoint điều khiển ngược lại qua MQTT (Ví dụ: tắt còi buzzer từ xa)
+  app.post('/api/control', async (req, res) => {
+    const { command, device } = req.body;
+    const topic = `smarthome/control/${device || 'buzzer'}`;
+    const payload = JSON.stringify({ command: command || 'OFF', timestamp: Date.now() });
+
+    // 1. Nếu client MQTT nền đã sẵn sàng (chạy localhost hoặc container)
+    if (mqttClient && mqttClient.connected) {
+      mqttClient.publish(topic, payload, (err) => {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        console.log(`📢 [Lệnh Điều Khiển Đã Gửi Tới MQTT]: ${topic} -> ${payload}`);
+        return res.json({ success: true, topic, command });
+      });
+      return;
+    }
+
+    // 2. Nếu chạy trên Vercel Serverless: kết nối nhanh theo yêu cầu để publish lệnh
+    try {
+      const brokerUrl = `${MQTT_PROTOCOL}://${MQTT_HOST}:${MQTT_PORT}`;
+      const client = mqtt.connect(brokerUrl, {
+        clientId: `ctrl_${Math.random().toString(16).substring(2, 8)}`,
+        username: MQTT_USERNAME,
+        password: MQTT_PASSWORD,
+        rejectUnauthorized: false,
+      });
+
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          client.end(true);
+          reject(new Error('Kết nối EMQX Broker quá thời gian chờ (5s)'));
+        }, 5000);
+
+        client.on('connect', () => {
+          client.publish(topic, payload, (err) => {
+            clearTimeout(timer);
+            client.end();
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+
+        client.on('error', (err) => {
           clearTimeout(timer);
-          client.end();
-          if (err) reject(err);
-          else resolve();
+          client.end(true);
+          reject(err);
         });
       });
 
-      client.on('error', (err) => {
-        clearTimeout(timer);
-        client.end(true);
-        reject(err);
-      });
-    });
-
-    console.log(`📢 [Vercel On-Demand MQTT Control]: ${topic} -> ${payload}`);
-    return res.json({ success: true, topic, command });
-  } catch (err) {
-    console.error('❌ Lỗi gửi lệnh điều khiển MQTT:', err.message);
-    return res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// 5. Khởi chạy Server (Hỗ trợ cả Localhost và Vercel Serverless)
-// ---------------------------------------------------------------------------
-if (!process.env.VERCEL) {
-  app.listen(PORT, () => {
-    console.log(`====================================================`);
-    console.log(`🌐 Server LAB 2 đang chạy tại: http://localhost:${PORT}`);
-    console.log(`☁️ EMQX Host: ${MQTT_HOST}:${MQTT_PORT} (TLS/SSL)`);
-    console.log(`📡 Topic Cảnh báo: "${MQTT_TOPIC_ALERTS}"`);
-    console.log(`====================================================`);
+      console.log(`📢 [Vercel On-Demand MQTT Control]: ${topic} -> ${payload}`);
+      return res.json({ success: true, topic, command });
+    } catch (err) {
+      console.error('❌ Lỗi gửi lệnh điều khiển MQTT:', err.message);
+      return res.status(500).json({ success: false, error: err.message });
+    }
   });
-}
 
-module.exports = app;
+  // ---------------------------------------------------------------------------
+  // 5. Khởi chạy Server (Hỗ trợ cả Localhost và Vercel Serverless)
+  // ---------------------------------------------------------------------------
+  if (!process.env.VERCEL) {
+    app.listen(PORT, () => {
+      console.log(`====================================================`);
+      console.log(`🌐 Server LAB 2 đang chạy tại: http://localhost:${PORT}`);
+      console.log(`☁️ EMQX Host: ${MQTT_HOST}:${MQTT_PORT} (TLS/SSL)`);
+      console.log(`📡 Topic Cảnh báo: "${MQTT_TOPIC_ALERTS}"`);
+      console.log(`====================================================`);
+    });
+  }
+
+  module.exports = app;
+}
