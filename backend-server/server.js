@@ -189,6 +189,7 @@ async function handleIncomingAlert({ alertType, message, value, location, sensor
     success: true,
     messageId: fcmTopicResult || (tokenPushResults.length > 0 ? 'tokens_sent' : 'logged'),
     sentToTokens: tokenPushResults.length,
+    pushResults: tokenPushResults,
     data: alertRecord
   };
 }

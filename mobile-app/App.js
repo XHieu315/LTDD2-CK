@@ -30,7 +30,7 @@ Notifications.setNotificationHandler({
 export default function App() {
   const [expoPushToken, setExpoPushToken] = useState('');
   const [deviceToken, setDeviceToken] = useState('');
-  const [serverUrl, setServerUrl] = useState('http://192.168.32.154:5000');
+  const [serverUrl, setServerUrl] = useState('https://ltdd-2-ck.vercel.app');
   const [syncStatus, setSyncStatus] = useState('online'); // 'online' | 'syncing' | 'offline'
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -161,6 +161,13 @@ export default function App() {
       };
 
       setAlerts(prev => [newAlert, ...prev]);
+
+      // Bật cửa sổ Popup khẩn cấp ngay trên màn hình nếu người dùng đang mở App
+      Alert.alert(
+        `🚨 ${title || 'CẢNH BÁO KHẨN CẤP'}`,
+        `${body || 'Có sự cố phát sinh từ cảm biến IoT!'}\n\n📍 Vị trí: ${data?.location || 'Nhà Thông Minh'}`,
+        [{ text: 'ĐÃ XÁC NHẬN', style: 'destructive' }]
+      );
     });
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
@@ -448,7 +455,13 @@ async function registerForPushNotificationsAsync() {
     let finalStatus = existingStatus;
 
     if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
+      const { status } = await Notifications.requestPermissionsAsync({
+        ios: {
+          allowAlert: true,
+          allowBadge: true,
+          allowSound: true,
+        },
+      });
       finalStatus = status;
     }
 
