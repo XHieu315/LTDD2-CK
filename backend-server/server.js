@@ -316,17 +316,32 @@ app.post('/api/register-token', (req, res) => {
   return res.json({ success: true, totalTokens: registeredTokens.size });
 });
 
-// Endpoint HTTP POST (Dùng khi test Postman hoặc Wokwi HTTP)
+// Endpoint HTTP POST (Dùng khi test Postman, Wokwi HTTP, hoặc Webhook HTTP Server từ EMQX Cloud)
 app.post('/api/iot/alert', async (req, res) => {
   try {
-    const { alertType, message, value, location, sensor } = req.body;
-    if (!alertType || !message) {
-      return res.status(400).json({ success: false, error: 'Thiếu alertType hoặc message' });
+    let body = req.body || {};
+    
+    // Nếu EMQX gửi wrapper dạng { topic: "...", payload: ... }
+    let payload = body.payload;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch (e) {}
     }
+    const data = (payload && typeof payload === 'object') ? { ...body, ...payload } : body;
+
+    const alertType = data.alertType || data.alert || (body.topic ? body.topic.split('/').pop().toUpperCase() : 'CẢNH BÁO KHẨN');
+    const message = data.message || data.msg || 'Phát hiện sự cố bất thường từ hệ thống!';
+    const value = data.value !== undefined ? data.value : (data.val !== undefined ? data.val : null);
+    const location = data.location || 'Smart Home (EMQX / MQTTX)';
+    const sensor = data.sensor || (body.topic ? `MQTT Topic: ${body.topic}` : 'Cảm biến Hệ Thống');
+
+    console.log('📥 [/api/iot/alert Nhận payload]:', { alertType, message, value, location, sensor });
 
     const result = await handleIncomingAlert({ alertType, message, value, location, sensor });
     return res.status(200).json(result);
   } catch (error) {
+    console.error('❌ Lỗi xử lý /api/iot/alert:', error.message);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
