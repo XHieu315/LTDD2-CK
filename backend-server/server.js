@@ -361,12 +361,16 @@ app.post('/api/control', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. Khởi chạy Server
+// 5. Khởi chạy Server (Hỗ trợ cả Localhost và Vercel Serverless)
 // ---------------------------------------------------------------------------
-app.listen(PORT, () => {
-  console.log(`====================================================`);
-  console.log(`🌐 Server LAB 2 đang chạy tại: http://localhost:${PORT}`);
-  console.log(`☁️ EMQX Host: ${MQTT_HOST}:${MQTT_PORT} (TLS/SSL)`);
-  console.log(`📡 Topic Cảnh báo: "${MQTT_TOPIC_ALERTS}"`);
-  console.log(`====================================================`);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`====================================================`);
+    console.log(`🌐 Server LAB 2 đang chạy tại: http://localhost:${PORT}`);
+    console.log(`☁️ EMQX Host: ${MQTT_HOST}:${MQTT_PORT} (TLS/SSL)`);
+    console.log(`📡 Topic Cảnh báo: "${MQTT_TOPIC_ALERTS}"`);
+    console.log(`====================================================`);
+  });
+}
+
+module.exports = app;
