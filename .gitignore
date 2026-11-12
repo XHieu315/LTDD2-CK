@@ -1,0 +1,58 @@
+# -----------------------------------------------------------------------------
+# Dependencies (Thư viện cài đặt)
+# -----------------------------------------------------------------------------
+node_modules/
+*/node_modules/
+package-lock.json
+
+# -----------------------------------------------------------------------------
+# Environment & Sensitive Credentials (Bảo mật tài khoản, mật khẩu, Firebase)
+# -----------------------------------------------------------------------------
+.env
+.env.*
+*/.env
+*/.env.*
+*.env
+
+# Giữ lại file mẫu .env.example để người khác biết cách cấu hình
+!.env.example
+!*/.env.example
+
+# Firebase Secret Keys
+serviceAccountKey.json
+*/serviceAccountKey.json
+*firebase-adminsdk*.json
+*/ *firebase-adminsdk*.json
+google-services.json
+*/google-services.json
+GoogleService-Info.plist
+*/GoogleService-Info.plist
+
+# Token data
+registered_tokens.json
+*/registered_tokens.json
+
+# -----------------------------------------------------------------------------
+# Expo & React Native Build Artifacts
+# -----------------------------------------------------------------------------
+.expo/
+*/.expo/
+dist/
+web-build/
+*.hbc
+
+# -----------------------------------------------------------------------------
+# Logs & Temporary Files
+# -----------------------------------------------------------------------------
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# -----------------------------------------------------------------------------
+# OS & IDE System Files
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "author": "CK-LTDD2",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht22",
+      "top": -140,
+      "left": -120,
+      "attrs": { "temperature": "28", "humidity": "65" }
+    },
+    {
+      "type": "wokwi-pir-motion-sensor",
+      "id": "pir",
+      "top": -140,
+      "left": 130,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn_flame",
+      "top": 120,
+      "left": -140,
+      "attrs": { "color": "red", "label": "Cháy (Flame)" }
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "pot_gas",
+      "top": 220,
+      "left": -140,
+      "attrs": { "label": "Gas (MQ-2)" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_alarm",
+      "top": 120,
+      "left": 170,
+      "attrs": { "color": "red", "label": "Cảnh báo" }
+    },
+    {
+      "type": "wokwi-buzzer",
+      "id": "buzzer",
+      "top": 220,
+      "left": 170,
+      "attrs": { "volume": "0.5" }
+    }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+
+    [ "dht22:VCC", "esp:3V3", "red", [ "v0" ] ],
+    [ "dht22:GND", "esp:GND.1", "black", [ "v0" ] ],
+    [ "dht22:SDA", "esp:15", "blue", [ "v0" ] ],
+
+    [ "pir:VCC", "esp:3V3", "red", [ "v0" ] ],
+    [ "pir:GND", "esp:GND.1", "black", [ "v0" ] ],
+    [ "pir:OUT", "esp:13", "green", [ "v0" ] ],
+
+    [ "btn_flame:1.l", "esp:14", "orange", [ "v0" ] ],
+    [ "btn_flame:2.l", "esp:GND.2", "black", [ "v0" ] ],
+
+    [ "pot_gas:1", "esp:GND.2", "black", [ "v0" ] ],
+    [ "pot_gas:2", "esp:34", "purple", [ "v0" ] ],
+    [ "pot_gas:3", "esp:3V3", "red", [ "v0" ] ],
+
+    [ "led_alarm:A", "esp:2", "red", [ "v0" ] ],
+    [ "led_alarm:C", "esp:GND.1", "black", [ "v0" ] ],
+
+    [ "buzzer:1", "esp:GND.1", "black", [ "v0" ] ],
+    [ "buzzer:2", "esp:4", "yellow", [ "v0" ] ]
+  ],
+  "dependencies": {}
+}
+

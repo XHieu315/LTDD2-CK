@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Hệ Thống Báo Động IoT",
+    "slug": "iot-alert-mobile-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.iot.alertapp"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.iot.alertapp",
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "WAKE_LOCK"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#e74c3c"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "d42a5e46-bd49-4998-ae54-6e8b074e105c"
+      }
+    },
+    "owner": "hieu315"
+  }
+}
