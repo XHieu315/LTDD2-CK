@@ -347,19 +347,58 @@ app.post('/api/notify-token', async (req, res) => {
 });
 
 // Endpoint điều khiển ngược lại qua MQTT (Ví dụ: tắt còi buzzer từ xa)
-app.post('/api/control', (req, res) => {
+app.post('/api/control', async (req, res) => {
   const { command, device } = req.body;
   const topic = `smarthome/control/${device || 'buzzer'}`;
   const payload = JSON.stringify({ command: command || 'OFF', timestamp: Date.now() });
 
+  // 1. Nếu client MQTT nền đã sẵn sàng (chạy localhost hoặc container)
   if (mqttClient && mqttClient.connected) {
     mqttClient.publish(topic, payload, (err) => {
       if (err) return res.status(500).json({ success: false, error: err.message });
       console.log(`📢 [Lệnh Điều Khiển Đã Gửi Tới MQTT]: ${topic} -> ${payload}`);
       return res.json({ success: true, topic, command });
     });
-  } else {
-    return res.status(503).json({ success: false, error: 'MQTT Broker chưa kết nối' });
+    return;
+  }
+
+  // 2. Nếu chạy trên Vercel Serverless: kết nối nhanh theo yêu cầu để publish lệnh
+  try {
+    const brokerUrl = `${MQTT_PROTOCOL}://${MQTT_HOST}:${MQTT_PORT}`;
+    const client = mqtt.connect(brokerUrl, {
+      clientId: `ctrl_${Math.random().toString(16).substring(2, 8)}`,
+      username: MQTT_USERNAME,
+      password: MQTT_PASSWORD,
+      rejectUnauthorized: false,
+    });
+
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        client.end(true);
+        reject(new Error('Kết nối EMQX Broker quá thời gian chờ (5s)'));
+      }, 5000);
+
+      client.on('connect', () => {
+        client.publish(topic, payload, (err) => {
+          clearTimeout(timer);
+          client.end();
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+
+      client.on('error', (err) => {
+        clearTimeout(timer);
+        client.end(true);
+        reject(err);
+      });
+    });
+
+    console.log(`📢 [Vercel On-Demand MQTT Control]: ${topic} -> ${payload}`);
+    return res.json({ success: true, topic, command });
+  } catch (err) {
+    console.error('❌ Lỗi gửi lệnh điều khiển MQTT:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
