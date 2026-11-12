@@ -316,10 +316,21 @@ app.post('/api/register-token', (req, res) => {
   return res.json({ success: true, totalTokens: registeredTokens.size });
 });
 
+// Hỗ trợ GET / HEAD cho việc kiểm tra kết nối từ EMQX Connector (Nút Test)
+app.get('/api/iot/alert', (req, res) => {
+  res.status(200).json({ status: 'ok', message: 'IoT Alert Webhook endpoint is ready' });
+});
+
 // Endpoint HTTP POST (Dùng khi test Postman, Wokwi HTTP, hoặc Webhook HTTP Server từ EMQX Cloud)
 app.post('/api/iot/alert', async (req, res) => {
   try {
     let body = req.body || {};
+
+    // Nếu là request test rỗng (từ nút Test của EMQX Cloud)
+    if (Object.keys(body).length === 0) {
+      console.log('🔍 [EMQX Connector Test Ping] Nhận tín hiệu kiểm tra kết nối thành công.');
+      return res.status(200).json({ status: 'ok', message: 'Test connection successful' });
+    }
     
     // Nếu EMQX gửi wrapper dạng { topic: "...", payload: ... }
     let payload = body.payload;
