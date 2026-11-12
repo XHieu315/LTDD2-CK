@@ -125,7 +125,6 @@ async function sendPushToToken(token, title, body, data = {}) {
   return { type: 'mock', message: 'Token được ghi nhận ở Console' };
 }
 
-// Bộ nhớ đệm chống trùng lặp cảnh báo (Deduplication trong 4 giây)
 // Bộ nhớ đệm chống trùng lặp cảnh báo (Deduplication trong 8 giây)
 let lastAlertCache = { type: '', time: 0, val: null };
 
@@ -134,84 +133,81 @@ async function handleIncomingAlert({ alertType, message, value, location, sensor
   const normType = String(alertType).toUpperCase();
   const now = Date.now();
 
-  // Nếu cùng 1 loại sự cố đến liên tiếp trong vòng 4 giây (do vừa gửi MQTT vừa gọi Webhook) -> Bỏ qua tin trùng
-  if (lastAlertCache.type === normType && (now - lastAlertCache.time) < 4000) {
-    console.log(`⏳ [Chống lặp] Bỏ qua cảnh báo trùng lặp [${normType}] trong vòng 4s.`);
-    // Nếu cùng 1 loại sự cố đến liên tiếp trong vòng 8 giây (do vừa gửi MQTT vừa gọi HTTP) -> Bỏ qua tin trùng
-    if (lastAlertCache.type === normType && (now - lastAlertCache.time) < 8000) {
-      console.log(`⏳ [Chống lặp] Bỏ qua cảnh báo trùng lặp [${normType}] trong vòng 8s.`);
-      return { success: true, duplicate: true, message: 'Bỏ qua cảnh báo trùng lặp' };
-    }
-    lastAlertCache = { type: normType, time: now, val: value };
-
-    const timestamp = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-    const alertRecord = {
-      id: Date.now().toString(),
-      alertType: String(alertType).toUpperCase(),
-      message,
-      value: value !== undefined ? value : null,
-      location: location || 'Hệ thống Smart Home',
-      sensor: sensor || 'Cảm biến IoT',
-      timestamp
-    };
-
-    // Lưu vào lịch sử (giới hạn 50 bản ghi)
-    alertHistory.unshift(alertRecord);
-    if (alertHistory.length > 50) alertHistory.pop();
-
-    console.log(`\n🚨 [CẢNH BÁO IOT XỬ LÝ - ${timestamp}]`);
-    console.log(`Loại: ${alertRecord.alertType} | Giá trị: ${alertRecord.value}`);
-    console.log(`Tin nhắn: ${alertRecord.message}`);
-
-    // 1. Gửi Push tới tất cả Device Token đã kết nối
-    const tokenPushResults = [];
-    for (const token of registeredTokens) {
-      const pushRes = await sendPushToToken(
-        token,
-        `⚠️ CẢNH BÁO: ${alertRecord.alertType}`,
-        `${alertRecord.message} (Chỉ số: ${alertRecord.value ?? 'N/A'})`,
-        alertRecord
-      );
-      tokenPushResults.push(pushRes);
-    }
-
-    // 2. Gửi thêm vào Topic Firebase Admin (nếu đã cấu hình)
-    let fcmTopicResult = null;
-    if (fcmAvailable && admin) {
-      try {
-        const payload = {
-          topic: IOT_TOPIC,
-          notification: {
-            title: `⚠️ CẢNH BÁO KHẨN: ${alertRecord.alertType}`,
-            body: `${alertRecord.message} (Chỉ số: ${alertRecord.value ?? 'N/A'})`
-          },
-          data: Object.fromEntries(Object.entries(alertRecord).map(([k, v]) => [k, String(v ?? '')])),
-          android: {
-            priority: 'high',
-            notification: {
-              channelId: 'iot_emergency_channel',
-              sound: 'default',
-              priority: 'max',
-              color: '#FF0000',
-              defaultVibrateTimings: true
-            }
-          }
-        };
-        fcmTopicResult = await admin.messaging().send(payload);
-        console.log('📡 Đã gửi Push Notification tới topic:', IOT_TOPIC, '| MessageId:', fcmTopicResult);
-      } catch (fcmErr) {
-        console.error('❌ Lỗi FCM Topic:', fcmErr.message);
-      }
-    }
-
-    return {
-      success: true,
-      messageId: fcmTopicResult || (tokenPushResults.length > 0 ? 'tokens_sent' : 'logged'),
-      sentToTokens: tokenPushResults.length,
-      pushResults: tokenPushResults,
-      data: alertRecord
-    };
+  // Nếu cùng 1 loại sự cố đến liên tiếp trong vòng 8 giây -> Bỏ qua tin trùng
+  if (lastAlertCache.type === normType && (now - lastAlertCache.time) < 8000) {
+    console.log(`⏳ [Chống lặp] Bỏ qua cảnh báo trùng lặp [${normType}] trong vòng 8s.`);
+    return { success: true, duplicate: true, message: 'Bỏ qua cảnh báo trùng lặp' };
   }
+  lastAlertCache = { type: normType, time: now, val: value };
+
+  const timestamp = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+  const alertRecord = {
+    id: Date.now().toString(),
+    alertType: normType,
+    message,
+    value: value !== undefined ? value : null,
+    location: location || 'Hệ thống Smart Home',
+    sensor: sensor || 'Cảm biến IoT',
+    timestamp
+  };
+
+  // Lưu vào lịch sử (giới hạn 50 bản ghi)
+  alertHistory.unshift(alertRecord);
+  if (alertHistory.length > 50) alertHistory.pop();
+
+  console.log(`\n🚨 [CẢNH BÁO IOT XỬ LÝ - ${timestamp}]`);
+  console.log(`Loại: ${alertRecord.alertType} | Giá trị: ${alertRecord.value}`);
+  console.log(`Tin nhắn: ${alertRecord.message}`);
+
+  // 1. Gửi Push tới tất cả Device Token đã kết nối
+  const tokenPushResults = [];
+  for (const token of registeredTokens) {
+    const pushRes = await sendPushToToken(
+      token,
+      `⚠️ CẢNH BÁO: ${alertRecord.alertType}`,
+      `${alertRecord.message} (Chỉ số: ${alertRecord.value ?? 'N/A'})`,
+      alertRecord
+    );
+    tokenPushResults.push(pushRes);
+  }
+
+  // 2. Gửi thêm vào Topic Firebase Admin (nếu đã cấu hình)
+  let fcmTopicResult = null;
+  if (fcmAvailable && admin) {
+    try {
+      const payload = {
+        topic: IOT_TOPIC,
+        notification: {
+          title: `⚠️ CẢNH BÁO KHẨN: ${alertRecord.alertType}`,
+          body: `${alertRecord.message} (Chỉ số: ${alertRecord.value ?? 'N/A'})`
+        },
+        data: Object.fromEntries(Object.entries(alertRecord).map(([k, v]) => [k, String(v ?? '')])),
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'iot_emergency_channel',
+            sound: 'default',
+            priority: 'max',
+            color: '#FF0000',
+            defaultVibrateTimings: true
+          }
+        }
+      };
+      fcmTopicResult = await admin.messaging().send(payload);
+      console.log('📡 Đã gửi Push Notification tới topic:', IOT_TOPIC, '| MessageId:', fcmTopicResult);
+    } catch (fcmErr) {
+      console.error('❌ Lỗi FCM Topic:', fcmErr.message);
+    }
+  }
+
+  return {
+    success: true,
+    messageId: fcmTopicResult || (tokenPushResults.length > 0 ? 'tokens_sent' : 'logged'),
+    sentToTokens: tokenPushResults.length,
+    pushResults: tokenPushResults,
+    data: alertRecord
+  };
+}
 
   // ---------------------------------------------------------------------------
   // 3. Tích hợp EMQX Cloud Broker qua MQTTS (Port 8883)
@@ -448,4 +444,3 @@ async function handleIncomingAlert({ alertType, message, value, location, sensor
   }
 
   module.exports = app;
-}
