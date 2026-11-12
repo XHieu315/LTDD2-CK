@@ -1,19 +1,24 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include "DHT.h"
+
 // ---------------------------------------------------------------------------
-// 1. Cấu hình WiFi và EMQX Cloud Broker (Port 8883 SSL/TLS)
+// 1. Cấu hình WiFi, EMQX Cloud Broker và Vercel Cloud API
 // ---------------------------------------------------------------------------
 const char* WIFI_SSID = "Wokwi-GUEST";
 const char* WIFI_PASS = "";
 
-// Thông tin EMQX Cloud từ tài khoản của bạn:
+// A. Thông tin EMQX Cloud Broker (Port 8883 MQTTS)
 const char* MQTT_BROKER   = "f122f61f.ala.asia-southeast1.emqxsl.com";
-const int   MQTT_PORT     = 8883; // Cổng bảo mật SSL/TLS
+const int   MQTT_PORT     = 8883; 
 const char* MQTT_USERNAME = "hieu";
-const char* MQTT_PASSWORD = "123"; // Thay mật khẩu của bạn vào đây
+const char* MQTT_PASSWORD = "123"; 
+
+// B. Đường dẫn API Server NodeJS đã deploy lên Vercel Cloud (LAB 3)
+const char* VERCEL_API_URL = "https://ltdd-2-ck.vercel.app/api/iot/alert";
 
 // ---------------------------------------------------------------------------
 // 2. Chân Cảm biến & Cơ cấu chấp hành
@@ -69,7 +74,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.print(" | Payload: ");
   Serial.println(message);
 
-  // Nếu nhận lệnh tắt còi báo động từ xa:
   if (String(topic).indexOf("control") >= 0) {
     if (message.indexOf("OFF") >= 0) {
       noTone(PIN_BUZZER);
@@ -89,7 +93,6 @@ void connectToMQTT() {
 
     if (mqttClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_PASSWORD)) {
       Serial.println("✅ Kết nối EMQX thành công!");
-      // Đăng ký nhận lệnh điều khiển từ xa
       mqttClient.subscribe("smarthome/control/#");
       Serial.println("📡 Đã subscribe topic điều khiển: smarthome/control/#");
     } else {
@@ -102,11 +105,48 @@ void connectToMQTT() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Hàm Publish Cảnh Báo Lên EMQX
+// 6. Hàm Gọi API HTTP POST lên Vercel Cloud (LAB 3 - Kích hoạt Push Notification)
+// ---------------------------------------------------------------------------
+void sendHttpAlertToVercel(String alertType, String message, float value) {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClientSecure httpsClient;
+    httpsClient.setInsecure(); // Bỏ qua kiểm tra chứng chỉ SSL để chạy trên Wokwi
+
+    HTTPClient http;
+    http.begin(httpsClient, VERCEL_API_URL);
+    http.addHeader("Content-Type", "application/json");
+
+    StaticJsonDocument<256> doc;
+    doc["alertType"] = alertType;
+    doc["message"]   = message;
+    doc["value"]     = value;
+    doc["location"]  = "Nhà Thông Minh (Wokwi)";
+
+    String requestBody;
+    serializeJson(doc, requestBody);
+
+    Serial.println("🌐 [CALL API VERCEL CLOUD]: " + String(VERCEL_API_URL));
+    int httpCode = http.POST(requestBody);
+
+    if (httpCode > 0) {
+      String response = http.getString();
+      Serial.printf("✅ [Vercel Phản Hồi] Code: %d | Body: %s\n", httpCode, response.c_str());
+      Serial.println("📲 Server Vercel đã gửi Push Notification tới iPhone thành công!");
+    } else {
+      Serial.printf("❌ [Lỗi Gọi Vercel] Code: %d (%s)\n", httpCode, http.errorToString(httpCode).c_str());
+    }
+
+    http.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Hàm Xử Lý Cảnh Báo (Gửi song song MQTT cho MQTTX và HTTP cho Vercel)
 // ---------------------------------------------------------------------------
 void publishAlert(const char* topic, String alertType, String message, float value) {
   triggerLocalAlarm();
 
+  // BƯỚC 1: Publish lên EMQX Broker (Cho phần mềm MQTTX nhận realtime)
   StaticJsonDocument<256> doc;
   doc["alert"]     = alertType;
   doc["msg"]       = message;
@@ -118,28 +158,24 @@ void publishAlert(const char* topic, String alertType, String message, float val
   serializeJson(doc, buffer);
 
   Serial.println("\n--------------------------------------------------");
-  Serial.print("🚀 [MQTT PUBLISH ALERT] Topic: ");
+  Serial.print("🚀 [1. BẮN MQTT CHO MQTTX] Topic: ");
   Serial.println(topic);
-  Serial.print("📦 Payload: ");
-  Serial.println(buffer);
+  mqttClient.publish(topic, buffer);
 
-  if (mqttClient.publish(topic, buffer)) {
-    Serial.println("✅ Đã gửi cảnh báo thành công lên EMQX Broker!");
-  } else {
-    Serial.println("❌ Lỗi khi publish cảnh báo!");
-  }
+  // BƯỚC 2: Gọi API POST lên Vercel Cloud (Để Vercel bắn Push Notification về iPhone)
+  sendHttpAlertToVercel(alertType, message, value);
   Serial.println("--------------------------------------------------\n");
 }
 
 // ---------------------------------------------------------------------------
-// 7. Khởi tạo Thiết bị (setup)
+// 8. Khởi tạo Thiết bị (setup)
 // ---------------------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
   delay(1000);
 
   Serial.println("\n==================================================");
-  Serial.println("🤖 ESP32 WOKWI + EMQX CLOUD BROKER (PORT 8883 TLS)");
+  Serial.println("🤖 ESP32 WOKWI: EMQX MQTT + VERCEL CLOUD API");
   Serial.println("==================================================");
 
   pinMode(PIN_PIR, INPUT);
@@ -159,16 +195,14 @@ void setup() {
   }
   Serial.println("\n✅ WiFi đã kết nối thành công!");
 
-  // Cấu hình TLS/SSL cho ESP32 (bỏ qua xác minh CA để chạy trơn tru trên Wokwi)
+  // Cấu hình TLS/SSL cho MQTT
   espClient.setInsecure();
-
-  // Cấu hình MQTT Client
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
 }
 
 // ---------------------------------------------------------------------------
-// 8. Vòng lặp giám sát Cảm biến (loop)
+// 9. Vòng lặp giám sát Cảm biến (loop)
 // ---------------------------------------------------------------------------
 void loop() {
   if (!mqttClient.connected()) {
@@ -238,7 +272,7 @@ void loop() {
     lastPirAlertTime = currentMillis;
   }
 
-  // 5. GỬI DỮ LIỆU TELEMETRY ĐỊNH KỲ (Mỗi 5 giây)
+  // 5. GỬI DỮ LIỆU TELEMETRY ĐỊNH KỲ LÊN MQTTX (Mỗi 5 giây)
   if (currentMillis - lastTelemetryTime >= 5000) {
     StaticJsonDocument<128> teleDoc;
     teleDoc["temp"] = isnan(temperature) ? 25.0 : temperature;
@@ -249,7 +283,7 @@ void loop() {
     serializeJson(teleDoc, teleBuffer);
     mqttClient.publish("smarthome/telemetry", teleBuffer);
 
-    Serial.printf("[Telemetry -> EMQX] Temp: %.1f°C | Hum: %.1f%% | Gas: %d\n",
+    Serial.printf("[Telemetry -> MQTTX] Temp: %.1f°C | Hum: %.1f%% | Gas: %d\n",
                   isnan(temperature) ? 0.0 : temperature,
                   isnan(humidity) ? 0.0 : humidity,
                   gasAnalogValue);
